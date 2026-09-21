@@ -19,7 +19,6 @@ const sceneExitTimers = new Map();
 const audioFadeFrames = new WeakMap();
 const audioPlayVersions = new WeakMap();
 const openingMusic = new Audio();
-const continuationMusic = new Audio();
 const letterMusic = new Audio();
 const ENVELOPE_HOLD_TIME = 10000;
 const CONTINUATION_START_TIME = 2 * 60 + 11;
@@ -27,15 +26,16 @@ const OPENING_VOLUME = 0.8;
 const CONTINUATION_VOLUME = 0.2;
 const LETTER_VOLUME = 0.62;
 const assetUrl = (fileName) => `${import.meta.env.BASE_URL}assets/${fileName}`;
+const openingTrackSource = assetUrl('birthday-opening.mp3');
+const continuationTrackSource = assetUrl('happy-birthday-continuation.mp3');
+let openingPlaylistPhase = 'opening';
 
 openingMusic.preload = 'auto';
-continuationMusic.preload = 'metadata';
 letterMusic.preload = 'metadata';
-openingMusic.src = assetUrl('birthday-opening.mp3');
-continuationMusic.src = assetUrl('happy-birthday-continuation.mp3');
+openingMusic.src = openingTrackSource;
 letterMusic.src = assetUrl('letter-confession.mp3');
 
-[openingMusic, continuationMusic, letterMusic].forEach((track) => {
+[openingMusic, letterMusic].forEach((track) => {
   track.loop = false;
   track.volume = 0;
 });
@@ -118,12 +118,12 @@ function startMusic(track, volume, startAt = 0, fadeDuration = 1200) {
 }
 
 function ensureOpeningPlaylist() {
-  if (!continuationMusic.paused) {
-    fadeAudio(continuationMusic, CONTINUATION_VOLUME, 500);
-  } else if (!openingMusic.paused) {
-    fadeAudio(openingMusic, OPENING_VOLUME, 500);
+  const targetVolume = openingPlaylistPhase === 'opening' ? OPENING_VOLUME : CONTINUATION_VOLUME;
+  if (!openingMusic.paused) {
+    fadeAudio(openingMusic, targetVolume, 500);
   } else {
-    startMusic(openingMusic, OPENING_VOLUME);
+    const startAt = openingPlaylistPhase === 'opening' ? 0 : CONTINUATION_START_TIME;
+    startMusic(openingMusic, targetVolume, startAt);
   }
 }
 
@@ -148,8 +148,42 @@ function stopMusic(track) {
   track.volume = 0;
 }
 
+function startContinuationMusic() {
+  openingPlaylistPhase = 'continuation';
+  const playVersion = (audioPlayVersions.get(openingMusic) || 0) + 1;
+  audioPlayVersions.set(openingMusic, playVersion);
+  openingMusic.src = continuationTrackSource;
+  openingMusic.preload = 'auto';
+  openingMusic.volume = 0;
+
+  const seekToContinuation = () => {
+    if (audioPlayVersions.get(openingMusic) === playVersion) {
+      openingMusic.currentTime = CONTINUATION_START_TIME;
+    }
+  };
+
+  if (openingMusic.readyState >= HTMLMediaElement.HAVE_METADATA) {
+    seekToContinuation();
+  } else {
+    openingMusic.addEventListener('loadedmetadata', seekToContinuation, { once: true });
+  }
+
+  const playback = openingMusic.play();
+  playback?.then(() => fadeAudio(openingMusic, CONTINUATION_VOLUME, 600)).catch(() => {
+    document.getElementById('sound-indicator').classList.remove('sound-toggle--active');
+  });
+}
+
+function resetOpeningPlaylist() {
+  openingPlaylistPhase = 'opening';
+  openingMusic.src = openingTrackSource;
+  openingMusic.preload = 'auto';
+  openingMusic.volume = 0;
+  openingMusic.load();
+}
+
 openingMusic.addEventListener('ended', () => {
-  startMusic(continuationMusic, CONTINUATION_VOLUME, CONTINUATION_START_TIME, 600);
+  if (openingPlaylistPhase === 'opening') startContinuationMusic();
 });
 
 function createAmbient() {
@@ -300,7 +334,7 @@ const envelopeButton = document.getElementById('envelope-button');
 envelopeButton.addEventListener('click', () => {
   if (envelopeButton.classList.contains('envelope-button--open')) return;
   envelopeButton.classList.add('envelope-button--open');
-  switchMusic([openingMusic, continuationMusic], letterMusic);
+  switchMusic([openingMusic], letterMusic);
   playChime();
   transitionTimer = window.setTimeout(startConfession, ENVELOPE_HOLD_TIME);
 });
@@ -354,8 +388,8 @@ function startConfession() {
 document.getElementById('replay-button').addEventListener('click', () => {
   clearTimers();
   stopMusic(openingMusic);
-  stopMusic(continuationMusic);
   stopMusic(letterMusic);
+  resetOpeningPlaylist();
   startMusic(openingMusic, OPENING_VOLUME);
   document.getElementById('sound-indicator').classList.add('sound-toggle--active');
   cakeScene.classList.remove('is-holding', 'cake-complete');
